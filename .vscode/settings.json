@@ -1,0 +1,5 @@
+{
+    "cmake.sourceDirectory": "C:/Users/Mythb/OneDrive/Documents/PlatformIO/Projects/Test flame/.pio/libdeps/esp32dev/Unity",
+    "idf.portWin": "COM4",
+    "cmake.configureOnOpen": true
+}
