@@ -1,27 +1,26 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
-// #include <Adafruit_LPS2X.h>
-// #include <Adafruit_Sensor.h>
-// #include "Adafruit_BMP3XX.h"
-// #include <Adafruit_I2CDevice.h>
-// #include <Wire.h>
 #include <Adafruit_DPS310.h>
 #include <queue>
 
 
 #define LED_PIN 25
-#define NUM_LEDS 7
-#define theta_range 60  //in degrees
-#define distance_to_pixel 100  // in
-#define white_intensity 0.5
+#define inner_ring 8
+#define outer_ring 12
+#define theta_range 30  //in degrees
+#define inner_distance_to_pixel 40  // in mm(?) who knows
+#define outer_distance_to_pixel 80
+#define white_intensity 0.1
 #define green_intensity 0.2
-Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRBW + NEO_KHZ800);
+#define radius_range 40
+#define NUM_LEDS 1+inner_ring+outer_ring
+Adafruit_NeoPixel strip(1+inner_ring+outer_ring, LED_PIN, NEO_GRBW + NEO_KHZ800);
 #define ambient_pressure 1021.8 //tempoaray for one sensor operations
 
 using namespace std;
-#define avg_intensity  60
+#define avg_intensity  60 //out of 255
 #define random_range  avg_intensity*0.05
-
+#define LED_enable 32
 // Adafruit_LPS22 lps;
 Adafruit_DPS310 dps_ambient;
 Adafruit_DPS310 dps_flow;
@@ -49,19 +48,23 @@ queue<fire> fire_queue;
 void setup(){
   Serial.begin(115200);
   delay(100);
-
+  pinMode(LED_enable, OUTPUT);
+  digitalWrite(LED_enable, HIGH);
   //create LED location array
   LED_location[0] = {0, 0, 0};  // central LED at center of cordiante array
-  for(int i = 1; i < NUM_LEDS; i++){
-    LED_location[i] = {i, i*(360/(NUM_LEDS-1)), distance_to_pixel}; //address, ignores the middle LED theta location in space, distance to center of the LED module
+  for(int i = 1; i <= inner_ring; i++){
+    LED_location[i] = {i, i*(360/(inner_ring)), inner_distance_to_pixel}; //address, ignores the middle LED theta location in space, distance to center of the LED module
+  } 
+  for(int t = 1; t <= outer_ring; t++){
+    LED_location[t+inner_ring] = {t+inner_ring, t*(360/(outer_ring)), outer_distance_to_pixel}; //address, ignores the middle LED theta location in space, distance to center of the LED module
   } 
 
-  if (! dps_flow.begin_I2C(0x77)) {             //initialize air speed pressure sensor
+  if (! dps_flow.begin_I2C(0x76)) {             //initialize air speed pressure sensor
     Serial.println("Failed to find DPS_flow");
   }
   Serial.println("DPS_flow OK!");
 
-  if (! dps_ambient.begin_I2C(0x76)) {             //initialize amibient pressure sensor
+  if (! dps_ambient.begin_I2C(0x77)) {             //initialize amibient pressure sensor
     Serial.println("Failed to find DPS_ambient");
   }
   Serial.println("DPS_ambient OK!");
@@ -97,26 +100,28 @@ void control_led(fire flame_position){
    * @brief takes in a flame coordiante and turns on the corisponding LED(s)
    * 
    */
-  if(flame_position.radius > 20){ // deternes if the flame is far enough away from the center to dim the center LED
-    int center_intensity = 20*flame_position.intensity/(abs(flame_position.radius));
+  if(flame_position.radius > 20){ // determins if the flame is far enough away from the center to dim the center LED
+    int center_intensity = 10*flame_position.intensity/(abs(flame_position.radius));
     strip.setPixelColor(LED_location[0].address,strip.Color(center_intensity,center_intensity*green_intensity,0,center_intensity*white_intensity));
   }
   else{
     strip.setPixelColor(LED_location[0].address,strip.Color(flame_position.intensity,flame_position.intensity*green_intensity,0,flame_position.intensity*white_intensity));
   }
   for(int i = 1; i < NUM_LEDS; i++){  //scan though the LED location array to find LEDs near the flame coordinate
-    if(LED_location[i].theta < flame_position.theta+theta_range && LED_location[i].theta > flame_position.theta-theta_range){
-      float diff_theta = abs(LED_location[i].theta-flame_position.theta)/10;
-      float diff_radius = abs(LED_location[i].radius-flame_position.radius)/10;
-      //to deal with divide by zero errors
-      if(diff_theta == 0){
-        diff_theta = 1;
+    if(LED_location[i].theta < flame_position.theta+theta_range && LED_location[i].theta > flame_position.theta-theta_range){ // start with theta
+      if(LED_location[i].radius < flame_position.radius+radius_range){ // see how far out to light leds
+        float diff_theta = abs(LED_location[i].theta-flame_position.theta)/10;
+        float diff_radius = abs(LED_location[i].radius-flame_position.radius)/10;
+        //to deal with divide by zero errors
+        if(diff_theta == 0){
+          diff_theta = 1;
+        }
+        if(diff_radius == 0){
+          diff_radius = 1;
+        }
+        int temp_intensity = flame_position.intensity/(diff_theta*diff_radius);
+        strip.setPixelColor(LED_location[i].address,strip.Color(temp_intensity,temp_intensity*green_intensity,0,temp_intensity*white_intensity));
       }
-      if(diff_radius == 0){
-        diff_radius = 1;
-      }
-      int temp_intensity = flame_position.intensity/(diff_theta*diff_radius);
-      strip.setPixelColor(LED_location[i].address,strip.Color(temp_intensity,temp_intensity*green_intensity,0,temp_intensity*white_intensity));
     }
     else if(LED_location[i].theta < flame_position.theta+theta_range-360 || LED_location[i].theta > flame_position.theta-theta_range+360){
       float diff_theta = abs(LED_location[i].theta-flame_position.theta)/10;
@@ -235,17 +240,17 @@ void led_transition(fire next,fire previous, bool verbose = false){
 // }
 
 fire randomFlame(fire old_vector, float _wind = 0.0){
-  int randomchange = random(60);
+  int randomchange = random(100);
   fire vector;
-  if(randomchange == 20 || _wind > 0.9){
+  if(randomchange == 20 || _wind > 0.1){
     vector.theta = random(360);
-    vector.radius = random(50, distance_to_pixel);
+    vector.radius = random(50, outer_distance_to_pixel);
     vector.intensity = random(avg_intensity-random_range,avg_intensity-random_range);
   }
   else{
-    vector.radius = old_vector.radius - (0.5*old_vector.radius*(1-((distance_to_pixel-old_vector.radius)/distance_to_pixel)))+random(-5,5);
-    if(vector.radius > distance_to_pixel){
-      vector.radius = distance_to_pixel;
+    vector.radius = old_vector.radius - (0.5*old_vector.radius*(1-((outer_distance_to_pixel-old_vector.radius)/outer_distance_to_pixel)))+random(-10,5);
+    if(vector.radius > outer_distance_to_pixel){
+      vector.radius = outer_distance_to_pixel;
     }
     else if(vector.radius < 0){
       vector.radius = abs(vector.radius);
@@ -295,7 +300,7 @@ float get_airspeed(){
   sensors_event_t temp_event_ambient, pressure_event_ambient;
   dps_flow.getEvents(&temp_event_flow, &pressure_event_flow);
   dps_ambient.getEvents(&temp_event_ambient, &pressure_event_ambient);
-  float airspeed = (sqrt((2*(pressure_event_flow.pressure-pressure_event_ambient.pressure+pressure_offset))/1.225))-0.6;//remove the 0.6
+  float airspeed = (sqrt((2*(pressure_event_flow.pressure-pressure_event_ambient.pressure+pressure_offset))/1.225))-0.6;//TODO remove the 0.6
   // Serial.print("airspeed: ");Serial.print(airspeed);Serial.println(" m/s");
   return airspeed;
 }
@@ -305,8 +310,9 @@ void loop(){
   // Serial.print("queue size: ");Serial.println(fire_queue.size());
   wind = get_airspeed();
   Serial.println(wind);
-  Serial.println(run);
+  // Serial.println(run);
   if(run){
+    digitalWrite(LED_enable, HIGH);
     if(wind > 0.1){
       fire windy_fire = randomFlame(fire_queue.front(), wind);
       windy_fire.intensity = int(windy_fire.intensity/float(30*wind));
@@ -319,19 +325,22 @@ void loop(){
     }
     control_led(fire_queue.front());
     fire_queue.pop();
-    delay(random(5,15));
+    delay(random(1,5));
   }
   else{
-
-    for(int i = 0; i < NUM_LEDS;i++){
-      strip.setPixelColor(i,strip.Color(0,0,0,0));
-    }
-    strip.show();
+    delay(2);
   }
-  if(wind > 0.3){
+  if(wind > 0.45){
     if(!swap_state){
       run = !run;
       swap_state = true;
+      if(run){
+        digitalWrite(LED_enable, HIGH);
+        delay(2);
+      }
+      else{
+        digitalWrite(LED_enable, LOW);
+      }
     }
     else{
       delay(500);
